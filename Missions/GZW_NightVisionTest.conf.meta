@@ -1,0 +1,9 @@
+MetaFileClass {
+ Name "{4237986B31954E0C}Missions/GZW_NightVisionTest.conf"
+ Configurations {
+  CONFResourceClass PC {
+  }
+  CONFResourceClass HEADLESS : PC {
+  }
+ }
+}

@@ -1,0 +1,5 @@
+FilmGrainEffect {
+ Intensity 0.085
+ Sharpness 1.35
+ Monochromatic 1
+}

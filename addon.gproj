@@ -1,0 +1,14 @@
+GameProject {
+ ID "GZW_NIGHTVISION_TEST"
+ GUID "4D50B0575768450B"
+ TITLE "GZW Night Vision Test"
+ Dependencies {
+  "58D0FB3206B6F859"
+ }
+ Configurations {
+  GameProjectConfig PC {
+  }
+  GameProjectConfig HEADLESS {
+  }
+ }
+}

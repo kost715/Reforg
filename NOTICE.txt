@@ -1,0 +1,4 @@
+GZW Night Vision Test
+
+Original prototype scripts, post-process materials, scope mask, and test configuration created for this project.
+The test scene inherits the vanilla Arma Reforger Conflict world; no custom terrain or third-party mods are included.

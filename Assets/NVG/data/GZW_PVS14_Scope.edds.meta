@@ -1,0 +1,9 @@
+MetaFileClass {
+ Name "{E224AA4715C94863}Assets/NVG/data/GZW_PVS14_Scope.edds"
+ Configurations {
+  PNGResourceClass PC : "{DC555BD399D92412}Configs/System/ResourceTypes/PC/TextureUnspecified.conf" {
+  }
+  PNGResourceClass HEADLESS : "{699C82A6807668A7}Configs/System/ResourceTypes/HEADLESS/TextureUnspecified.conf" {
+  }
+ }
+}

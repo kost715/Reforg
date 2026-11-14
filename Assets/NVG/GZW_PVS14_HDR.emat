@@ -1,0 +1,24 @@
+HDREffect {
+ SpeedDarkToBright 3
+ SpeedBrightToDark 8
+ FilmicShoulderStrength 0.15
+ FilmicLinearStrength 0.05
+ FilmicLinearAngle 1.5
+ FilmicToeStrength 0.01
+ FilmicToeNumerator -0.1
+ FilmicToeDenumerator 0.5
+ FilmicExposureBias 18
+ FilmicWhitePoint 2
+ ToneMapBlend 1
+ BloomIntensity 0.12
+ Contrast 1.35
+ OverlayFactor 0
+ Saturation 0
+ ColorizationColor 0.15 1 0.2 0
+ VignetteMode Scope
+ Vignette 1.2
+ VignetteSharpness 0.4
+ ReticleMap "{E224AA4715C94863}Assets/NVG/data/GZW_PVS14_Scope.edds"
+ ReticleScale 1
+ LensFlaresEnabled 1
+}

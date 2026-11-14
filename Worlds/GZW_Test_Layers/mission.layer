@@ -1,0 +1,9 @@
+GenericEntity GZW_NightVisionTestEntity {
+ components {
+  GZW_NightVisionTestComponent "{4D50B05700000100}" {
+   m_HDRMaterial "{FC3F883230814A34}Assets/NVG/GZW_PVS14_HDR.emat"
+   m_GrainMaterial "{897D7A5D34FC427D}Assets/NVG/GZW_PVS14_Grain.emat"
+  }
+ }
+ coords 0 0 0
+}

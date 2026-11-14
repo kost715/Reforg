@@ -1,0 +1,9 @@
+MetaFileClass {
+ Name "{FC3F883230814A34}Assets/NVG/GZW_PVS14_HDR.emat"
+ Configurations {
+  EMATResourceClass PC {
+  }
+  EMATResourceClass HEADLESS : PC {
+  }
+ }
+}

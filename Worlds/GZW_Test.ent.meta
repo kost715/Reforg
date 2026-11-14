@@ -1,0 +1,11 @@
+MetaFileClass {
+ Name "{98AFBA2B38B54DDB}Worlds/GZW_Test.ent"
+ Configurations {
+  ENTResourceClass PC {
+  }
+  ENTResourceClass LINUX : PC {
+  }
+  ENTResourceClass HEADLESS : PC {
+  }
+ }
+}
