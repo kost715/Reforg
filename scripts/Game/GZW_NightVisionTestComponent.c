@@ -28,8 +28,14 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	[Attribute("12", UIWidgets.Slider, "World camera slot used by the night vision camera. Must differ from the main camera and from PiP scopes (vanilla scopes use 8)", params: "1 31 1", category: "Composition")]
 	protected int m_iCameraIndex;
 
-	[Attribute("1", UIWidgets.Slider, "Resolution scale of the night vision render", params: "0.25 1 0.05", category: "Composition")]
+	[Attribute("0.75", UIWidgets.Slider, "Resolution scale of the night vision render. Lower is cheaper and softer", params: "0.25 1 0.05", category: "Performance")]
 	protected float m_fResolutionScale;
+
+	[Attribute("0", UIWidgets.Slider, "Furthest distance the night vision camera draws, in metres. 0: same as the main camera. Lower is cheaper, but distant terrain disappears inside the aperture", params: "0 5000 50", category: "Performance")]
+	protected float m_fViewDistanceLimit;
+
+	[Attribute("0", UIWidgets.Slider, "Frame rate cap of the night vision render. 0: every frame. A cap is cheaper, but the image falls behind the periphery when the camera moves", params: "0 240 5", category: "Performance")]
+	protected int m_iMaxFPS;
 
 	[Attribute("0", UIWidgets.ComboBox, "Pixel format of the night vision render", "", ParamEnumArray.FromEnum(RenderTargetWidgetFormat), category: "Composition")]
 	protected RenderTargetWidgetFormat m_eRenderFormat;
@@ -104,6 +110,10 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected static const string ACTION_NEXT_FORMAT = "GZW_NVG_NextFormat";
 	protected static const string ACTION_NEXT_MATERIAL = "GZW_NVG_NextMaterial";
 	protected static const string ACTION_TOGGLE_NIGHT = "GZW_NVG_ToggleNight";
+	protected static const string ACTION_RESOLUTION_DOWN = "GZW_NVG_ResolutionDown";
+	protected static const string ACTION_RESOLUTION_UP = "GZW_NVG_ResolutionUp";
+	protected static const string ACTION_NEXT_VIEW_DISTANCE = "GZW_NVG_NextViewDistance";
+	protected static const string ACTION_NEXT_MAX_FPS = "GZW_NVG_NextMaxFPS";
 
 	//! HDR slot of a PiP camera, the one vanilla PiP scopes use.
 	protected static const int PIP_HDR_PRIORITY = 10;
@@ -198,6 +208,10 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			inputManager.AddActionListener(ACTION_NEXT_FORMAT, EActionTrigger.DOWN, OnNextFormatAction);
 			inputManager.AddActionListener(ACTION_NEXT_MATERIAL, EActionTrigger.DOWN, OnNextMaterialAction);
 			inputManager.AddActionListener(ACTION_TOGGLE_NIGHT, EActionTrigger.DOWN, OnToggleNightAction);
+			inputManager.AddActionListener(ACTION_RESOLUTION_DOWN, EActionTrigger.DOWN, OnResolutionDownAction);
+			inputManager.AddActionListener(ACTION_RESOLUTION_UP, EActionTrigger.DOWN, OnResolutionUpAction);
+			inputManager.AddActionListener(ACTION_NEXT_VIEW_DISTANCE, EActionTrigger.DOWN, OnNextViewDistanceAction);
+			inputManager.AddActionListener(ACTION_NEXT_MAX_FPS, EActionTrigger.DOWN, OnNextMaxFPSAction);
 			m_bListening = true;
 		}
 
@@ -205,7 +219,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		if (m_fForcedTimeOfDay >= 0)
 			GetGame().GetCallqueue().CallLater(ForceTimeOfDay, FORCED_TIME_DELAY_MS, false);
 
-		Print("[GZW NVG] Ready. N: toggle, Left Shift + =/-: gain, Left Shift + ] / [ / ; / ': debug composition / render format / HDR material / night.");
+		Print("[GZW NVG] Ready. N: toggle, Left Shift + =/-: gain, Left Shift + ] / [ / ; / ': debug composition / render format / HDR material / night. Left Shift + comma / period / backslash / slash: resolution down / up / view distance / max FPS.");
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -228,6 +242,10 @@ class GZW_NightVisionTestComponent : ScriptComponent
 				inputManager.RemoveActionListener(ACTION_NEXT_FORMAT, EActionTrigger.DOWN, OnNextFormatAction);
 				inputManager.RemoveActionListener(ACTION_NEXT_MATERIAL, EActionTrigger.DOWN, OnNextMaterialAction);
 				inputManager.RemoveActionListener(ACTION_TOGGLE_NIGHT, EActionTrigger.DOWN, OnToggleNightAction);
+				inputManager.RemoveActionListener(ACTION_RESOLUTION_DOWN, EActionTrigger.DOWN, OnResolutionDownAction);
+				inputManager.RemoveActionListener(ACTION_RESOLUTION_UP, EActionTrigger.DOWN, OnResolutionUpAction);
+				inputManager.RemoveActionListener(ACTION_NEXT_VIEW_DISTANCE, EActionTrigger.DOWN, OnNextViewDistanceAction);
+				inputManager.RemoveActionListener(ACTION_NEXT_MAX_FPS, EActionTrigger.DOWN, OnNextMaxFPSAction);
 			}
 		}
 
@@ -268,7 +286,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	}
 
 	//------------------------------------------------------------------------------------------------
-	//! eturn true when a device already exists in the current world
+	//! 
+eturn true when a device already exists in the current world
 	static bool HasInstance()
 	{
 		return s_Instance != null;
@@ -572,12 +591,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 		m_wRenderTarget.Update();
 		m_wRenderTarget.SetRefresh(1, 0);
-		m_wRenderTarget.SetMaxFPS(0);
-		if (m_wRenderTexture)
-			m_wRenderTexture.SetMaxFPS(0);
-
 		m_wRenderTarget.SetFormat(m_eRenderFormat);
-		m_wRenderTarget.SetResolutionScale(m_fResolutionScale, m_fResolutionScale);
+		ApplyRenderSettings();
 		m_wRenderTarget.SetWorld(world, m_iCameraIndex);
 
 		BindRenderTexture();
@@ -704,6 +719,9 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		world.SetCameraEx(m_iCameraIndex, transform);
 		world.SetCameraVerticalFOV(m_iCameraIndex, pipFov);
 		world.SetCameraNearPlane(m_iCameraIndex, nearPlane);
+		if (m_fViewDistanceLimit > 0)
+			farPlane = Math.Min(farPlane, m_fViewDistanceLimit);
+
 		world.SetCameraFarPlane(m_iCameraIndex, farPlane);
 
 		if (mainExposure > 0)
@@ -856,6 +874,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			syncSource = "camera handler hook";
 
 		DbgUI.Text("Camera sync: " + syncSource);
+		DbgUI.Text(string.Format("Render: scale %1, view distance limit %2 m, max FPS %3 (0: no limit)", m_fResolutionScale, m_fViewDistanceLimit, m_iMaxFPS));
 		DbgUI.End();
 	}
 
@@ -875,6 +894,76 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected void ForceTimeOfDay()
 	{
 		SetTimeOfDay(m_fForcedTimeOfDay);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Pushes the resolution scale and the frame rate cap to the widgets. Safe to call while the device is on.
+	protected void ApplyRenderSettings()
+	{
+		if (!m_wRenderTarget)
+			return;
+
+		float scale = Math.Clamp(m_fResolutionScale, 0.25, 1);
+		m_wRenderTarget.SetResolutionScale(scale, scale);
+		m_wRenderTarget.SetMaxFPS(m_iMaxFPS);
+		if (m_wRenderTexture)
+			m_wRenderTexture.SetMaxFPS(m_iMaxFPS);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Debug key: cheaper, softer night vision render.
+	protected void OnResolutionDownAction(float value, EActionTrigger reason)
+	{
+		if (!m_bDebug)
+			return;
+
+		m_fResolutionScale = Math.Clamp(m_fResolutionScale - 0.125, 0.25, 1);
+		ApplyRenderSettings();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Debug key: sharper, more expensive night vision render.
+	protected void OnResolutionUpAction(float value, EActionTrigger reason)
+	{
+		if (!m_bDebug)
+			return;
+
+		m_fResolutionScale = Math.Clamp(m_fResolutionScale + 0.125, 0.25, 1);
+		ApplyRenderSettings();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Debug key: step the draw distance of the night vision camera. The camera picks it up on the next frame.
+	protected void OnNextViewDistanceAction(float value, EActionTrigger reason)
+	{
+		if (!m_bDebug)
+			return;
+
+		if (m_fViewDistanceLimit <= 0)
+			m_fViewDistanceLimit = 1500;
+		else if (m_fViewDistanceLimit > 800)
+			m_fViewDistanceLimit = 800;
+		else if (m_fViewDistanceLimit > 400)
+			m_fViewDistanceLimit = 400;
+		else
+			m_fViewDistanceLimit = 0;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Debug key: step the frame rate cap of the night vision render.
+	protected void OnNextMaxFPSAction(float value, EActionTrigger reason)
+	{
+		if (!m_bDebug)
+			return;
+
+		if (m_iMaxFPS <= 0)
+			m_iMaxFPS = 60;
+		else if (m_iMaxFPS > 30)
+			m_iMaxFPS = 30;
+		else
+			m_iMaxFPS = 0;
+
+		ApplyRenderSettings();
 	}
 
 	//------------------------------------------------------------------------------------------------
