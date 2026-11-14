@@ -31,6 +31,9 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	[Attribute("1", UIWidgets.Slider, "Resolution scale of the night vision render", params: "0.25 1 0.05", category: "Composition")]
 	protected float m_fResolutionScale;
 
+	[Attribute("0", UIWidgets.ComboBox, "Pixel format of the night vision render", "", ParamEnumArray.FromEnum(RenderTargetWidgetFormat), category: "Composition")]
+	protected RenderTargetWidgetFormat m_eRenderFormat;
+
 	[Attribute("0", UIWidgets.CheckBox, "Flip the night vision image vertically (use if the render texture shows upside down)", category: "Composition")]
 	protected bool m_bFlipVertical;
 
@@ -78,10 +81,15 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	[Attribute("1", UIWidgets.Slider, "Test helper: time of day (hours) forced a few seconds after start. Negative: leave the time alone", params: "-1 24 0.25", category: "Test scene")]
 	protected float m_fForcedTimeOfDay;
 
+	[Attribute("1", UIWidgets.CheckBox, "Test helper: debug panel with the device state, plus debug keys. Left Shift + ]: next composition, Left Shift + [: next render format", category: "Test scene")]
+	protected bool m_bDebug;
+
 	//------------------------------------------------------------------------------------------------
 	protected static const string ACTION_TOGGLE = "GZW_NVG_Toggle";
 	protected static const string ACTION_GAIN_UP = "GZW_NVG_GainUp";
 	protected static const string ACTION_GAIN_DOWN = "GZW_NVG_GainDown";
+	protected static const string ACTION_NEXT_COMPOSITION = "GZW_NVG_NextComposition";
+	protected static const string ACTION_NEXT_FORMAT = "GZW_NVG_NextFormat";
 
 	//! Slots of the stock world post-process chain, same ones the vanilla night scope swaps.
 	protected static const int HDR_PRIORITY = 16;
@@ -94,6 +102,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	//! Below the HUD, above the world.
 	protected static const int Z_ORDER = -100;
 	protected static const int FORCED_TIME_DELAY_MS = 3000;
+	//! The render texture gets its surface on the first render after it is sized, so the image is bound again for a few frames.
+	protected static const int REBIND_FRAMES = 3;
 
 	protected static const float FALLBACK_FOV = 74;
 	protected static const float FALLBACK_NEAR_PLANE = 0.05;
@@ -116,6 +126,12 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected int m_iLayoutHeight;
 	//! Side of the night vision square as a fraction of the screen height.
 	protected float m_fBoxFraction;
+	protected int m_iRebindFrames;
+
+	// Shown in the debug panel only.
+	protected bool m_bMaskLoaded;
+	protected float m_fMainFov;
+	protected float m_fNightVisionFov;
 
 	//------------------------------------------------------------------------------------------------
 	override void OnPostInit(IEntity owner)
@@ -139,6 +155,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			inputManager.AddActionListener(ACTION_TOGGLE, EActionTrigger.DOWN, OnToggleAction);
 			inputManager.AddActionListener(ACTION_GAIN_UP, EActionTrigger.DOWN, OnGainUpAction);
 			inputManager.AddActionListener(ACTION_GAIN_DOWN, EActionTrigger.DOWN, OnGainDownAction);
+			inputManager.AddActionListener(ACTION_NEXT_COMPOSITION, EActionTrigger.DOWN, OnNextCompositionAction);
+			inputManager.AddActionListener(ACTION_NEXT_FORMAT, EActionTrigger.DOWN, OnNextFormatAction);
 			m_bListening = true;
 		}
 
@@ -146,7 +164,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		if (m_fForcedTimeOfDay >= 0)
 			GetGame().GetCallqueue().CallLater(ForceTimeOfDay, FORCED_TIME_DELAY_MS, false);
 
-		Print("[GZW NVG] Ready. N: toggle, Left Shift + =/-: gain.");
+		Print("[GZW NVG] Ready. N: toggle, Left Shift + =/-: gain, Left Shift + ]/[: debug composition/render format.");
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -165,6 +183,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 				inputManager.RemoveActionListener(ACTION_TOGGLE, EActionTrigger.DOWN, OnToggleAction);
 				inputManager.RemoveActionListener(ACTION_GAIN_UP, EActionTrigger.DOWN, OnGainUpAction);
 				inputManager.RemoveActionListener(ACTION_GAIN_DOWN, EActionTrigger.DOWN, OnGainDownAction);
+				inputManager.RemoveActionListener(ACTION_NEXT_COMPOSITION, EActionTrigger.DOWN, OnNextCompositionAction);
+				inputManager.RemoveActionListener(ACTION_NEXT_FORMAT, EActionTrigger.DOWN, OnNextFormatAction);
 			}
 		}
 
@@ -188,6 +208,9 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			UpdateScope(world);
 		else
 			UpdatePiP(world);
+
+		if (m_bDebug)
+			DrawDebugPanel(world);
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -209,6 +232,50 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected void OnGainDownAction(float value, EActionTrigger reason)
 	{
 		ChangeGain(-1);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Debug key: restart the device in the next composition mode.
+	protected void OnNextCompositionAction(float value, EActionTrigger reason)
+	{
+		if (!m_bDebug)
+			return;
+
+		SwitchOff();
+
+		if (m_eComposition == GZW_ENightVisionComposition.MASKED_PIP)
+			m_eComposition = GZW_ENightVisionComposition.SQUARE_PIP;
+		else if (m_eComposition == GZW_ENightVisionComposition.SQUARE_PIP)
+			m_eComposition = GZW_ENightVisionComposition.FULLSCREEN_SCOPE;
+		else
+			m_eComposition = GZW_ENightVisionComposition.MASKED_PIP;
+
+		SwitchOn();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Debug key: restart the device with the next pixel format of the night vision render.
+	protected void OnNextFormatAction(float value, EActionTrigger reason)
+	{
+		if (!m_bDebug)
+			return;
+
+		SwitchOff();
+
+		if (m_eRenderFormat == RenderTargetWidgetFormat.DEFAULT)
+			m_eRenderFormat = RenderTargetWidgetFormat.INHERIT;
+		else if (m_eRenderFormat == RenderTargetWidgetFormat.INHERIT)
+			m_eRenderFormat = RenderTargetWidgetFormat.LDR;
+		else if (m_eRenderFormat == RenderTargetWidgetFormat.LDR)
+			m_eRenderFormat = RenderTargetWidgetFormat.LDR_SRGB;
+		else if (m_eRenderFormat == RenderTargetWidgetFormat.LDR_SRGB)
+			m_eRenderFormat = RenderTargetWidgetFormat.HDR_LOW;
+		else if (m_eRenderFormat == RenderTargetWidgetFormat.HDR_LOW)
+			m_eRenderFormat = RenderTargetWidgetFormat.HDR_HIGH;
+		else
+			m_eRenderFormat = RenderTargetWidgetFormat.DEFAULT;
+
+		SwitchOn();
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -240,7 +307,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		m_bEnabled = true;
 		SetEventMask(GetOwner(), EntityEvent.POSTFRAME);
 
-		PrintFormat("[GZW NVG] Enabled (%1). Gain step: 0.", typename.EnumToString(GZW_ENightVisionComposition, m_eActiveComposition));
+		PrintFormat("[GZW NVG] Enabled (%1, render format %2). Gain step: 0.", typename.EnumToString(GZW_ENightVisionComposition, m_eActiveComposition), typename.EnumToString(RenderTargetWidgetFormat, m_eRenderFormat));
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -356,13 +423,9 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			return false;
 
 		if (m_wRenderTexture)
+		{
 			StretchToParent(m_wRenderTarget);
 
-		m_wRenderTarget.SetWorld(world, m_iCameraIndex);
-		m_wRenderTarget.SetResolutionScale(m_fResolutionScale, m_fResolutionScale);
-
-		if (m_wRenderTexture)
-		{
 			m_wAperture = ImageWidget.Cast(workspace.CreateWidget(WidgetType.ImageWidgetTypeID, WidgetFlags.VISIBLE | WidgetFlags.BLEND | WidgetFlags.STRETCH | WidgetFlags.NOWRAP | WidgetFlags.IGNORE_CURSOR | WidgetFlags.NOFOCUS, Color.FromInt(Color.WHITE), 1, m_wRoot));
 			if (!m_wAperture)
 				return false;
@@ -370,10 +433,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			if (m_bFlipVertical)
 				m_wAperture.SetFlags(WidgetFlags.FLIPV);
 
-			m_wAperture.SetImageTexture(0, m_wRenderTexture);
-			m_wAperture.SetImage(0);
-
-			if (!m_wAperture.LoadMaskTexture(m_sMaskTexture))
+			m_bMaskLoaded = m_wAperture.LoadMaskTexture(m_sMaskTexture);
+			if (!m_bMaskLoaded)
 				PrintFormat("[GZW NVG] Aperture mask '%1' did not load: the image will show as an unmasked square. Reimport the PNG in Workbench.", m_sMaskTexture, level: LogLevel.WARNING);
 
 			if (m_bInvertMask)
@@ -382,10 +443,33 @@ class GZW_NightVisionTestComponent : ScriptComponent
 				m_wAperture.SetMaskMode(ImageMaskMode.REGULAR);
 		}
 
-		// Force the first layout pass.
+		// Sizes before anything renders: a render texture has no surface to hand out until it has a size.
 		m_iLayoutWidth = 0;
 		m_iLayoutHeight = 0;
+		UpdatePiPLayout(workspace);
+
+		m_wRoot.Update();
+		if (m_wRenderTexture)
+			m_wRenderTexture.Update();
+
+		m_wRenderTarget.Update();
+		m_wRenderTarget.SetFormat(m_eRenderFormat);
+		m_wRenderTarget.SetResolutionScale(m_fResolutionScale, m_fResolutionScale);
+		m_wRenderTarget.SetWorld(world, m_iCameraIndex);
+
+		BindRenderTexture();
 		return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Points the aperture image at the render texture.
+	protected void BindRenderTexture()
+	{
+		if (!m_wAperture || !m_wRenderTexture)
+			return;
+
+		m_wAperture.SetImageTexture(0, m_wRenderTexture);
+		m_wAperture.SetImage(0);
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -418,6 +502,12 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		if (workspace)
 			UpdatePiPLayout(workspace);
 
+		if (m_iRebindFrames > 0)
+		{
+			m_iRebindFrames--;
+			BindRenderTexture();
+		}
+
 		vector transform[4];
 		float fov = FALLBACK_FOV;
 		float nearPlane = FALLBACK_NEAR_PLANE;
@@ -445,6 +535,9 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		// shows inside that square: the image lines up with the periphery without any UV cropping.
 		float halfFov = Math.Clamp(fov, 1, 170) * 0.5 * Math.DEG2RAD;
 		float pipFov = 2 * Math.RAD2DEG * Math.Atan2(m_fBoxFraction * Math.Tan(halfFov), 1);
+
+		m_fMainFov = fov;
+		m_fNightVisionFov = pipFov;
 
 		world.SetCameraEx(m_iCameraIndex, transform);
 		world.SetCameraVerticalFOV(m_iCameraIndex, pipFov);
@@ -489,6 +582,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 		m_iLayoutWidth = screenWidth;
 		m_iLayoutHeight = screenHeight;
+		// A resized render texture gets a new surface.
+		m_iRebindFrames = REBIND_FRAMES;
 
 		float diameter = Math.Clamp(m_fApertureDiameter, 0.1, 1.5);
 		float softness = Math.Clamp(m_fEdgeSoftness, 0, 0.5);
@@ -573,7 +668,43 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	}
 
 	//------------------------------------------------------------------------------------------------
-	// Test scene helper
+	// Test scene helpers
+	//------------------------------------------------------------------------------------------------
+	//! State of the device on screen, so a screenshot is enough to tell what the pipeline is doing.
+	protected void DrawDebugPanel(notnull BaseWorld world)
+	{
+		int mainCameraId = world.GetCurrentCameraId();
+
+		string maskState = "not loaded";
+		if (m_bMaskLoaded)
+			maskState = "loaded";
+
+		DbgUI.Begin("GZW NVG", 20, 140);
+		DbgUI.Text("Composition: " + typename.EnumToString(GZW_ENightVisionComposition, m_eActiveComposition));
+		DbgUI.Text("Render format: " + typename.EnumToString(RenderTargetWidgetFormat, m_eRenderFormat));
+		DbgUI.Text(string.Format("Gain step: %1 (%2 EV)", m_iGain, GetGainEV()));
+		DbgUI.Text(string.Format("Camera slot: main %1, night vision %2", mainCameraId, m_iCameraIndex));
+		DbgUI.Text(string.Format("Exposure: main %1, night vision %2", world.GetCameraHDRBrightness(mainCameraId), world.GetCameraHDRBrightness(m_iCameraIndex)));
+		DbgUI.Text(string.Format("Scene brightness: main %1, night vision %2", world.GetCameraSceneMiddleBrightness(mainCameraId), world.GetCameraSceneMiddleBrightness(m_iCameraIndex)));
+		DbgUI.Text(string.Format("FOV: main %1, night vision %2", m_fMainFov, m_fNightVisionFov));
+		DbgUI.Text(string.Format("Screen: %1x%2, box %3 of height", m_iLayoutWidth, m_iLayoutHeight, m_fBoxFraction));
+		DbgUI.Text(string.Format("Widget px: texture %1, render %2, aperture %3", GetWidgetSize(m_wRenderTexture), GetWidgetSize(m_wRenderTarget), GetWidgetSize(m_wAperture)));
+		DbgUI.Text("Mask: " + maskState);
+		DbgUI.End();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected string GetWidgetSize(Widget widget)
+	{
+		if (!widget)
+			return "none";
+
+		float width;
+		float height;
+		widget.GetScreenSize(width, height);
+		return string.Format("%1x%2", Math.Round(width), Math.Round(height));
+	}
+
 	//------------------------------------------------------------------------------------------------
 	protected void ForceTimeOfDay()
 	{
