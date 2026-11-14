@@ -28,7 +28,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	[Attribute("12", UIWidgets.Slider, "World camera slot used by the night vision camera. Must differ from the main camera and from PiP scopes (vanilla scopes use 8)", params: "1 31 1", category: "Composition")]
 	protected int m_iCameraIndex;
 
-	[Attribute("0.75", UIWidgets.Slider, "Resolution scale of the night vision render. Lower is cheaper and softer", params: "0.25 1 0.05", category: "Performance")]
+	[Attribute("1", UIWidgets.Slider, "Resolution scale of the night vision render. Lower is cheaper and softer", params: "0.25 1 0.05", category: "Performance")]
 	protected float m_fResolutionScale;
 
 	[Attribute("0", UIWidgets.Slider, "Furthest distance the night vision camera draws, in metres. 0: same as the main camera. Lower is cheaper, but distant terrain disappears inside the aperture", params: "0 5000 50", category: "Performance")]
