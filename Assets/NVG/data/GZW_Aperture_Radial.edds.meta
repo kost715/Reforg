@@ -1,0 +1,9 @@
+MetaFileClass {
+ Name "{C6E5B3A91D7F4082}Assets/NVG/data/GZW_Aperture_Radial.edds"
+ Configurations {
+  PNGResourceClass PC : "{3549C665CAA9A8EA}Configs/System/ResourceTypes/PC/TextureUI.conf" {
+  }
+  PNGResourceClass HEADLESS : "{E604D15366D985DF}Configs/System/ResourceTypes/HEADLESS/TextureUI.conf" {
+  }
+ }
+}
