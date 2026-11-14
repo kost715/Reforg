@@ -1,0 +1,8 @@
+GenericEntity {
+ ID "4D50B05700000200"
+ components {
+  GZW_NightVisionTestComponent "{4D50B05700000201}" {
+   m_fForcedTimeOfDay -1
+  }
+ }
+}

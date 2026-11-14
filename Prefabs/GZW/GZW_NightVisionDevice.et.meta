@@ -1,0 +1,9 @@
+MetaFileClass {
+ Name "{A93E5D7C2B4F6018}Prefabs/GZW/GZW_NightVisionDevice.et"
+ Configurations {
+  EntityTemplateResourceClass PC {
+  }
+  EntityTemplateResourceClass HEADLESS : PC {
+  }
+ }
+}

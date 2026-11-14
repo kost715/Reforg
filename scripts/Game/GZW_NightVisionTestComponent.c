@@ -93,7 +93,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	[Attribute("1", UIWidgets.Slider, "Test helper: time of day (hours) forced a few seconds after start. Negative: leave the time alone", params: "-1 24 0.25", category: "Test scene")]
 	protected float m_fForcedTimeOfDay;
 
-	[Attribute("1", UIWidgets.CheckBox, "Test helper: debug panel with the device state, plus debug keys. Left Shift + ]: next composition, Left Shift + [: next render format, Left Shift + ;: next HDR material", category: "Test scene")]
+	[Attribute("1", UIWidgets.CheckBox, "Test helper: debug panel with the device state, plus debug keys. Left Shift + ]: next composition, Left Shift + [: next render format, Left Shift + ;: next HDR material, Left Shift + ': night or day", category: "Test scene")]
 	protected bool m_bDebug;
 
 	//------------------------------------------------------------------------------------------------
@@ -103,6 +103,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected static const string ACTION_NEXT_COMPOSITION = "GZW_NVG_NextComposition";
 	protected static const string ACTION_NEXT_FORMAT = "GZW_NVG_NextFormat";
 	protected static const string ACTION_NEXT_MATERIAL = "GZW_NVG_NextMaterial";
+	protected static const string ACTION_TOGGLE_NIGHT = "GZW_NVG_ToggleNight";
 
 	//! HDR slot of a PiP camera, the one vanilla PiP scopes use.
 	protected static const int PIP_HDR_PRIORITY = 10;
@@ -118,6 +119,10 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected static const int Z_ORDER = -100;
 	protected static const int FORCED_TIME_DELAY_MS = 3000;
 	protected static const int HOOK_HOLD_FRAMES = 3;
+	protected static const float DEBUG_NIGHT_HOUR = 1;
+	protected static const float DEBUG_DAY_HOUR = 12;
+	protected static const float DAYLIGHT_START_HOUR = 5;
+	protected static const float DAYLIGHT_END_HOUR = 20;
 
 	//! HDR materials the debug key steps through.
 	protected static const int DEBUG_MATERIAL_COUNT = 3;
@@ -142,6 +147,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected RenderTargetWidget m_wRenderTarget;
 	protected ImageWidget m_wAperture;
 
+	//! The one device that listens to input in this world. A weak reference: it reads null once that device is gone.
+	protected static GZW_NightVisionTestComponent s_Instance;
 	//! Device that is currently switched on, for the camera handler hook.
 	protected static GZW_NightVisionTestComponent s_ActiveDevice;
 	//! Frames left during which the camera handler hook is considered alive and owns the camera sync.
@@ -166,6 +173,14 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		if (System.IsConsoleApp() || SCR_Global.IsEditMode(owner))
 			return;
 
+		// One device per world: a second one would answer the same keys and fight over the same camera slot.
+		if (s_Instance && s_Instance != this)
+		{
+			Print("[GZW NVG] Another night vision device is already present; this one stays idle.");
+			return;
+		}
+
+		s_Instance = this;
 		SetEventMask(owner, EntityEvent.INIT);
 		owner.SetFlags(EntityFlags.ACTIVE);
 	}
@@ -182,6 +197,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			inputManager.AddActionListener(ACTION_NEXT_COMPOSITION, EActionTrigger.DOWN, OnNextCompositionAction);
 			inputManager.AddActionListener(ACTION_NEXT_FORMAT, EActionTrigger.DOWN, OnNextFormatAction);
 			inputManager.AddActionListener(ACTION_NEXT_MATERIAL, EActionTrigger.DOWN, OnNextMaterialAction);
+			inputManager.AddActionListener(ACTION_TOGGLE_NIGHT, EActionTrigger.DOWN, OnToggleNightAction);
 			m_bListening = true;
 		}
 
@@ -189,7 +205,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		if (m_fForcedTimeOfDay >= 0)
 			GetGame().GetCallqueue().CallLater(ForceTimeOfDay, FORCED_TIME_DELAY_MS, false);
 
-		Print("[GZW NVG] Ready. N: toggle, Left Shift + =/-: gain, Left Shift + ] / [ / ;: debug composition / render format / HDR material.");
+		Print("[GZW NVG] Ready. N: toggle, Left Shift + =/-: gain, Left Shift + ] / [ / ; / ': debug composition / render format / HDR material / night.");
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -211,10 +227,13 @@ class GZW_NightVisionTestComponent : ScriptComponent
 				inputManager.RemoveActionListener(ACTION_NEXT_COMPOSITION, EActionTrigger.DOWN, OnNextCompositionAction);
 				inputManager.RemoveActionListener(ACTION_NEXT_FORMAT, EActionTrigger.DOWN, OnNextFormatAction);
 				inputManager.RemoveActionListener(ACTION_NEXT_MATERIAL, EActionTrigger.DOWN, OnNextMaterialAction);
+				inputManager.RemoveActionListener(ACTION_TOGGLE_NIGHT, EActionTrigger.DOWN, OnToggleNightAction);
 			}
 		}
 
 		m_bListening = false;
+		if (s_Instance == this)
+			s_Instance = null;
 
 		super.OnDelete(owner);
 	}
@@ -246,6 +265,13 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	static GZW_NightVisionTestComponent GetActiveDevice()
 	{
 		return s_ActiveDevice;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! eturn true when a device already exists in the current world
+	static bool HasInstance()
+	{
+		return s_Instance != null;
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -848,22 +874,57 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	//------------------------------------------------------------------------------------------------
 	protected void ForceTimeOfDay()
 	{
+		SetTimeOfDay(m_fForcedTimeOfDay);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Debug key: jump to night, or back to noon when it is already dark.
+	protected void OnToggleNightAction(float value, EActionTrigger reason)
+	{
+		if (!m_bDebug)
+			return;
+
+		TimeAndWeatherManagerEntity manager = GetTimeManager();
+		if (!manager)
+			return;
+
+		float hour = manager.GetTimeOfTheDay();
+		if (hour > DAYLIGHT_START_HOUR && hour < DAYLIGHT_END_HOUR)
+			SetTimeOfDay(DEBUG_NIGHT_HOUR);
+		else
+			SetTimeOfDay(DEBUG_DAY_HOUR);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected TimeAndWeatherManagerEntity GetTimeManager()
+	{
 		ChimeraWorld world = ChimeraWorld.CastFrom(GetGame().GetWorld());
 		if (!world)
-			return;
+			return null;
 
 		TimeAndWeatherManagerEntity manager = world.GetTimeAndWeatherManager();
 		if (!manager)
-		{
 			Print("[GZW NVG] No time and weather manager in this world: set the time of day by hand.", LogLevel.WARNING);
+
+		return manager;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Sets the time of day and stops it from advancing, so the lighting stays put while testing.
+	protected void SetTimeOfDay(float hour)
+	{
+		TimeAndWeatherManagerEntity manager = GetTimeManager();
+		if (!manager)
+			return;
+
+		// Authority only: on a client of a remote server this is refused and the time stays as it is.
+		if (!manager.SetTimeOfTheDay(hour, true))
+		{
+			Print("[GZW NVG] The time of day can only be changed by the host.", LogLevel.WARNING);
 			return;
 		}
 
-		// Authority only: on a client of a remote server this is refused and the time stays as it is.
-		if (!manager.SetTimeOfTheDay(m_fForcedTimeOfDay, true))
-			return;
-
 		manager.SetIsDayAutoAdvanced(false);
-		PrintFormat("[GZW NVG] Test scene time forced to %1 h.", m_fForcedTimeOfDay);
+		PrintFormat("[GZW NVG] Time of day set to %1 h and frozen.", hour);
 	}
 }
