@@ -11,39 +11,6 @@ enum GZW_ENightVisionComposition
 	FULLSCREEN_SCOPE
 }
 
-[EntityEditorProps()]
-class GZW_NightVisionFollowerClass : GenericEntityClass
-{
-}
-
-//! Runtime helper, spawned as a child of the camera the player looks through.
-//! A child is updated after its parent, so its post-frame runs once the main camera has its final transform for
-//! the frame. Syncing the night vision camera from the device's own entity ran earlier and left it a frame behind.
-class GZW_NightVisionFollower : GenericEntity
-{
-	protected GZW_NightVisionTestComponent m_Device;
-
-	//------------------------------------------------------------------------------------------------
-	void SetDevice(GZW_NightVisionTestComponent device)
-	{
-		m_Device = device;
-	}
-
-	//------------------------------------------------------------------------------------------------
-	override void EOnPostFrame(IEntity owner, float timeSlice)
-	{
-		if (m_Device)
-			m_Device.OnCameraPostFrame();
-	}
-
-	//------------------------------------------------------------------------------------------------
-	void GZW_NightVisionFollower(IEntitySource src, IEntity parent)
-	{
-		SetEventMask(EntityEvent.POSTFRAME);
-		SetFlags(EntityFlags.ACTIVE);
-	}
-}
-
 [ComponentEditorProps(category: "GZW/Night Vision", description: "Standalone NVG test. N: toggle, Left Shift + =/-: gain.")]
 class GZW_NightVisionTestComponentClass : ScriptComponentClass
 {
@@ -150,6 +117,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	//! Below the HUD, above the world.
 	protected static const int Z_ORDER = -100;
 	protected static const int FORCED_TIME_DELAY_MS = 3000;
+	protected static const int HOOK_HOLD_FRAMES = 3;
 
 	//! HDR materials the debug key steps through.
 	protected static const int DEBUG_MATERIAL_COUNT = 3;
@@ -174,8 +142,10 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected RenderTargetWidget m_wRenderTarget;
 	protected ImageWidget m_wAperture;
 
-	protected GZW_NightVisionFollower m_Follower;
-	protected CameraBase m_FollowedCamera;
+	//! Device that is currently switched on, for the camera handler hook.
+	protected static GZW_NightVisionTestComponent s_ActiveDevice;
+	//! Frames left during which the camera handler hook is considered alive and owns the camera sync.
+	protected int m_iHookFrames;
 	protected int m_iLayoutWidth;
 	protected int m_iLayoutHeight;
 	//! Side of the night vision square as a fraction of the screen height.
@@ -262,75 +232,37 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 		if (m_eActiveComposition == GZW_ENightVisionComposition.FULLSCREEN_SCOPE)
 			UpdateScope(world);
-		else if (!AttachFollower(world))
+		else
 			UpdatePiP(world);
+
+		if (m_iHookFrames > 0)
+			m_iHookFrames--;
 
 		if (m_bDebug)
 			DrawDebugPanel(world);
 	}
 
 	//------------------------------------------------------------------------------------------------
-	//! Called by the follower once the main camera is final for this frame.
-	void OnCameraPostFrame()
+	static GZW_NightVisionTestComponent GetActiveDevice()
+	{
+		return s_ActiveDevice;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Called by the character camera handler with the camera transform it has just computed for this frame.
+	//! An entity's post-frame runs before that and only sees the previous frame's camera, which left the
+	//! night vision image one frame behind the periphery.
+	void OnPlayerCameraUpdated(vector transform[4])
 	{
 		if (!m_bEnabled || m_eActiveComposition == GZW_ENightVisionComposition.FULLSCREEN_SCOPE)
 			return;
 
 		BaseWorld world = GetGame().GetWorld();
-		if (world)
-			UpdatePiP(world);
-	}
-
-	//------------------------------------------------------------------------------------------------
-	//! Keeps the follower parented to the current camera.
-	//! eturn false when there is no camera entity to follow and the caller has to sync by itself
-	protected bool AttachFollower(notnull BaseWorld world)
-	{
-		CameraBase camera;
-		CameraManager cameraManager = GetGame().GetCameraManager();
-		if (cameraManager)
-			camera = cameraManager.CurrentCamera();
-
-		if (!camera)
-			return false;
-
-		// A follower dies with the camera it was attached to; the weak reference then reads null.
-		if (m_Follower && m_FollowedCamera == camera)
-			return true;
-
-		if (!m_Follower)
-		{
-			m_Follower = GZW_NightVisionFollower.Cast(GetGame().SpawnEntity(GZW_NightVisionFollower, world));
-			if (!m_Follower)
-				return false;
-
-			m_Follower.SetDevice(this);
-		}
-		else
-		{
-			IEntity previousParent = m_Follower.GetParent();
-			if (previousParent)
-				previousParent.RemoveChild(m_Follower);
-		}
-
-		camera.AddChild(m_Follower, -1, EAddChildFlags.AUTO_TRANSFORM);
-		m_FollowedCamera = camera;
-		return true;
-	}
-
-	//------------------------------------------------------------------------------------------------
-	protected void DeleteFollower()
-	{
-		m_FollowedCamera = null;
-		if (!m_Follower)
+		if (!world)
 			return;
 
-		IEntity followerParent = m_Follower.GetParent();
-		if (followerParent)
-			followerParent.RemoveChild(m_Follower);
-
-		delete m_Follower;
-		m_Follower = null;
+		m_iHookFrames = HOOK_HOLD_FRAMES;
+		ApplyCamera(world, transform);
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -448,6 +380,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			return;
 
 		m_bEnabled = true;
+		s_ActiveDevice = this;
 		SetEventMask(GetOwner(), EntityEvent.POSTFRAME);
 
 		PrintFormat("[GZW NVG] Enabled (%1, render format %2). Gain step: 0.", typename.EnumToString(GZW_ENightVisionComposition, m_eActiveComposition), typename.EnumToString(RenderTargetWidgetFormat, m_eRenderFormat));
@@ -461,6 +394,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 		m_bEnabled = false;
 		m_iGain = 0;
+		if (s_ActiveDevice == this)
+			s_ActiveDevice = null;
 
 		GenericEntity owner = GetOwner();
 		if (owner)
@@ -637,7 +572,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	//------------------------------------------------------------------------------------------------
 	protected void DisablePiP(BaseWorld world)
 	{
-		DeleteFollower();
+		m_iHookFrames = 0;
 
 		if (m_wRoot)
 			m_wRoot.RemoveFromHierarchy();
@@ -666,7 +601,11 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		if (workspace)
 			UpdatePiPLayout(workspace);
 
-		SyncCamera(world);
+		// While the camera handler hook is alive it has already set this frame's view; reading the camera
+		// here would put back the previous frame's.
+		if (m_iHookFrames <= 0)
+			SyncCamera(world);
+
 		RefreshRenderTexture();
 	}
 
@@ -684,10 +623,29 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	}
 
 	//------------------------------------------------------------------------------------------------
-	//! Copies the view of the main camera into the night vision camera slot.
+	//! Copies the view of the main camera, as the camera entity reports it, into the night vision camera slot.
+	//! Fallback for cameras the character camera handler does not drive; one frame late.
 	protected void SyncCamera(notnull BaseWorld world)
 	{
 		vector transform[4];
+
+		CameraBase camera;
+		CameraManager cameraManager = GetGame().GetCameraManager();
+		if (cameraManager)
+			camera = cameraManager.CurrentCamera();
+
+		if (camera)
+			camera.GetWorldCameraTransform(transform);
+		else
+			world.GetCurrentCamera(transform);
+
+		ApplyCamera(world, transform);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Points the night vision camera slot along the given view and sets its FOV, planes and exposure.
+	protected void ApplyCamera(notnull BaseWorld world, vector transform[4])
+	{
 		float fov = FALLBACK_FOV;
 		float nearPlane = FALLBACK_NEAR_PLANE;
 		float farPlane = FALLBACK_FAR_PLANE;
@@ -699,14 +657,9 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 		if (camera)
 		{
-			camera.GetWorldCameraTransform(transform);
 			fov = camera.GetVerticalFOV();
 			nearPlane = camera.GetNearPlane();
 			farPlane = camera.GetFarPlane();
-		}
-		else
-		{
-			world.GetCurrentCamera(transform);
 		}
 
 		// The square covers m_fBoxFraction of the screen height around the screen centre. A perspective
@@ -871,6 +824,12 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		DbgUI.Text(string.Format("Widget px: texture %1, render %2, aperture %3", GetWidgetSize(m_wRenderTexture), GetWidgetSize(m_wRenderTarget), GetWidgetSize(m_wAperture)));
 		DbgUI.Text("Mask: " + maskState);
 		DbgUI.Text("HDR material: " + m_sNightVisionMaterial);
+
+		string syncSource = "post-frame, one frame late";
+		if (m_iHookFrames > 0)
+			syncSource = "camera handler hook";
+
+		DbgUI.Text("Camera sync: " + syncSource);
 		DbgUI.End();
 	}
 
