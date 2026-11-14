@@ -1,0 +1,9 @@
+MetaFileClass {
+ Name "{D2A47C1E9B5F3068}Assets/NVG/GZW_PiP_Base_HDR.emat"
+ Configurations {
+  EMATResourceClass PC {
+  }
+  EMATResourceClass HEADLESS : PC {
+  }
+ }
+}

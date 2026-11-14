@@ -25,7 +25,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	[Attribute("0", UIWidgets.ComboBox, "How the night vision image is composited into the frame", "", ParamEnumArray.FromEnum(GZW_ENightVisionComposition), category: "Composition")]
 	protected GZW_ENightVisionComposition m_eComposition;
 
-	[Attribute("12", UIWidgets.Slider, "World camera slot used by the night vision camera. Must differ from the main camera and from PiP scopes (vanilla scopes use 8)", params: "1 31 1", category: "Composition")]
+	[Attribute("12", UIWidgets.Slider, "World camera slot used by the night vision camera. Must differ from the main camera and from PiP scopes (vanilla scopes use 8)", params: "1 26 1", category: "Composition")]
 	protected int m_iCameraIndex;
 
 	[Attribute("1", UIWidgets.Slider, "Resolution scale of the night vision render", params: "0.25 1 0.05", category: "Composition")]
@@ -53,20 +53,32 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 	//------------------------------------------------------------------------------------------------
 	// Image
-	[Attribute("{B81D4E6A2F9C7350}Assets/NVG/GZW_PVS14_PiP_HDR.emat", UIWidgets.ResourceNamePicker, "HDR material of the night vision camera (no vignette: the widget mask shapes the aperture)", "emat", category: "Image")]
+	[Attribute("{972DF18CB9BFCBD4}Common/Postprocess/HDR_ScopePiP.emat", UIWidgets.ResourceNamePicker, "HDR material of the night vision camera. Default: the material the game uses for its own PiP scopes", "emat", category: "Image")]
 	protected ResourceName m_sNightVisionMaterial;
 
-	[Attribute("{897D7A5D34FC427D}Assets/NVG/GZW_PVS14_Grain.emat", UIWidgets.ResourceNamePicker, "Film grain material", "emat", category: "Image")]
+	[Attribute("{BA5DE2A5962C178C}Common/Postprocess/NightNoise.emat", UIWidgets.ResourceNamePicker, "Film grain material of the night vision camera. Default: the game's night noise", "emat", category: "Image")]
 	protected ResourceName m_sGrainMaterial;
+
+	[Attribute("0.15 1 0.2 1", UIWidgets.ColorPicker, "Phosphor colour: the night vision image is multiplied by it", category: "Image")]
+	protected ref Color m_PhosphorColor;
+
+	[Attribute("0", UIWidgets.Slider, "Colour saturation of the night vision image before the phosphor tint. 0: monochrome", params: "0 1 0.05", category: "Image")]
+	protected float m_fSaturation;
 
 	[Attribute("{FC3F883230814A34}Assets/NVG/GZW_PVS14_HDR.emat", UIWidgets.ResourceNamePicker, "HDR material with the Scope vignette. Used by FULLSCREEN_SCOPE only", "emat", category: "Image")]
 	protected ResourceName m_sScopeMaterial;
+
+	[Attribute("{897D7A5D34FC427D}Assets/NVG/GZW_PVS14_Grain.emat", UIWidgets.ResourceNamePicker, "Film grain material. Used by FULLSCREEN_SCOPE only", "emat", category: "Image")]
+	protected ResourceName m_sScopeGrainMaterial;
 
 	[Attribute("1", UIWidgets.CheckBox, "Night vision camera copies the exposure of the main camera, the way vanilla PiP scopes do. Off: it runs its own auto exposure", category: "Image")]
 	protected bool m_bFollowMainExposure;
 
 	//------------------------------------------------------------------------------------------------
 	// Gain
+	[Attribute("3", UIWidgets.Slider, "Exposure boost of the night vision image at gain step 0, in EV stops", params: "-4 10 0.25", category: "Gain")]
+	protected float m_fBaseGain;
+
 	[Attribute("0.7", UIWidgets.Slider, "Exposure change per gain step, in EV stops", params: "0 2 0.05", category: "Gain")]
 	protected float m_fGainStep;
 
@@ -91,6 +103,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected static const string ACTION_NEXT_COMPOSITION = "GZW_NVG_NextComposition";
 	protected static const string ACTION_NEXT_FORMAT = "GZW_NVG_NextFormat";
 
+	//! HDR slot of a PiP camera, the one vanilla PiP scopes use.
+	protected static const int PIP_HDR_PRIORITY = 10;
 	//! Slots of the stock world post-process chain, same ones the vanilla night scope swaps.
 	protected static const int HDR_PRIORITY = 16;
 	protected static const int GRAIN_PRIORITY = 19;
@@ -104,6 +118,15 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected static const int FORCED_TIME_DELAY_MS = 3000;
 	//! The render texture gets its surface on the first render after it is sized, so the image is bound again for a few frames.
 	protected static const int REBIND_FRAMES = 3;
+
+	//! Debug tiles: the same view through different HDR materials, each on its own camera slot after the night vision one.
+	protected static const int DEBUG_TILE_COUNT = 5;
+	protected static const float DEBUG_TILE_SIZE = 0.13;
+	protected static const float DEBUG_TILE_GAP = 0.01;
+	protected static const string DEBUG_TILE_LEGEND = "none | stock HDR | vanilla ScopePiP | GZW base | GZW PVS-14";
+	protected static const ResourceName VANILLA_PIP_HDR_MATERIAL = "{972DF18CB9BFCBD4}Common/Postprocess/HDR_ScopePiP.emat";
+	protected static const ResourceName GZW_BASE_HDR_MATERIAL = "{D2A47C1E9B5F3068}Assets/NVG/GZW_PiP_Base_HDR.emat";
+	protected static const ResourceName GZW_PVS14_HDR_MATERIAL = "{B81D4E6A2F9C7350}Assets/NVG/GZW_PVS14_PiP_HDR.emat";
 
 	protected static const float FALLBACK_FOV = 74;
 	protected static const float FALLBACK_NEAR_PLANE = 0.05;
@@ -127,6 +150,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	//! Side of the night vision square as a fraction of the screen height.
 	protected float m_fBoxFraction;
 	protected int m_iRebindFrames;
+	protected ref array<RenderTargetWidget> m_aDebugTiles = {};
 
 	// Shown in the debug panel only.
 	protected bool m_bMaskLoaded;
@@ -367,6 +391,13 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	}
 
 	//------------------------------------------------------------------------------------------------
+	//! Exposure shift of the night vision camera against the main one.
+	protected float GetNightVisionEV()
+	{
+		return m_fBaseGain + GetGainEV();
+	}
+
+	//------------------------------------------------------------------------------------------------
 	// Picture-in-picture composition
 	//------------------------------------------------------------------------------------------------
 	protected bool EnablePiP(notnull BaseWorld world, int mainCameraId)
@@ -384,8 +415,17 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		// Camera first, so the very first rendered frame is already correct.
 		world.SetCameraType(m_iCameraIndex, CameraType.PERSPECTIVE);
 		world.SetCameraLensFlareSet(m_iCameraIndex, CameraLensFlareSetType.FirstPerson, string.Empty);
-		world.SetCameraPostProcessEffect(m_iCameraIndex, HDR_PRIORITY, PostProcessEffectType.HDR, m_sNightVisionMaterial);
+		world.SetCameraPostProcessEffect(m_iCameraIndex, PIP_HDR_PRIORITY, PostProcessEffectType.HDR, m_sNightVisionMaterial);
 		world.SetCameraPostProcessEffect(m_iCameraIndex, GRAIN_PRIORITY, PostProcessEffectType.FilmGrain, m_sGrainMaterial);
+
+		if (m_bDebug)
+		{
+			for (int i = 0; i < DEBUG_TILE_COUNT; i++)
+			{
+				world.SetCameraType(GetDebugTileCamera(i), CameraType.PERSPECTIVE);
+				world.SetCameraPostProcessEffect(GetDebugTileCamera(i), PIP_HDR_PRIORITY, PostProcessEffectType.HDR, GetDebugTileMaterial(i));
+			}
+		}
 
 		if (!CreatePiPWidgets(workspace, world))
 		{
@@ -433,6 +473,11 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			if (m_bFlipVertical)
 				m_wAperture.SetFlags(WidgetFlags.FLIPV);
 
+			// Phosphor look is done here, on the widget, so it does not depend on what the HDR material supports.
+			m_wAperture.SetSaturation(m_fSaturation);
+			if (m_PhosphorColor)
+				m_wAperture.SetColor(m_PhosphorColor);
+
 			m_bMaskLoaded = m_wAperture.LoadMaskTexture(m_sMaskTexture);
 			if (!m_bMaskLoaded)
 				PrintFormat("[GZW NVG] Aperture mask '%1' did not load: the image will show as an unmasked square. Reimport the PNG in Workbench.", m_sMaskTexture, level: LogLevel.WARNING);
@@ -441,6 +486,16 @@ class GZW_NightVisionTestComponent : ScriptComponent
 				m_wAperture.SetMaskMode(ImageMaskMode.INVERTED);
 			else
 				m_wAperture.SetMaskMode(ImageMaskMode.REGULAR);
+		}
+
+		if (m_bDebug)
+		{
+			for (int i = 0; i < DEBUG_TILE_COUNT; i++)
+			{
+				RenderTargetWidget tile = RenderTargetWidget.Cast(workspace.CreateWidget(WidgetType.RenderTargetWidgetTypeID, WidgetFlags.VISIBLE | WidgetFlags.IGNORE_CURSOR | WidgetFlags.NOFOCUS, Color.FromInt(Color.WHITE), 2, m_wRoot));
+				if (tile)
+					m_aDebugTiles.Insert(tile);
+			}
 		}
 
 		// Sizes before anything renders: a render texture has no surface to hand out until it has a size.
@@ -456,6 +511,12 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		m_wRenderTarget.SetFormat(m_eRenderFormat);
 		m_wRenderTarget.SetResolutionScale(m_fResolutionScale, m_fResolutionScale);
 		m_wRenderTarget.SetWorld(world, m_iCameraIndex);
+
+		foreach (int tileIndex, RenderTargetWidget debugTile : m_aDebugTiles)
+		{
+			debugTile.Update();
+			debugTile.SetWorld(world, GetDebugTileCamera(tileIndex));
+		}
 
 		BindRenderTexture();
 		return true;
@@ -482,16 +543,51 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		m_wRenderTexture = null;
 		m_wRenderTarget = null;
 		m_wAperture = null;
+		m_aDebugTiles.Clear();
 
 		if (!world)
 			return;
 
-		// The main camera was never modified, so only the night vision slot needs cleaning.
-		world.SetCameraPostProcessEffect(m_iCameraIndex, HDR_PRIORITY, PostProcessEffectType.None, string.Empty);
-		world.SetCameraPostProcessEffect(m_iCameraIndex, GRAIN_PRIORITY, PostProcessEffectType.None, string.Empty);
-		world.SetCameraLensFlareSet(m_iCameraIndex, CameraLensFlareSetType.None, string.Empty);
-		world.SetCameraHDRBrightness(m_iCameraIndex, -1);
-		world.AdjustCameraEV(m_iCameraIndex, 0);
+		// The main camera was never modified, so only the night vision slots need cleaning.
+		ResetCamera(world, m_iCameraIndex);
+		for (int i = 0; i < DEBUG_TILE_COUNT; i++)
+		{
+			ResetCamera(world, GetDebugTileCamera(i));
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected void ResetCamera(notnull BaseWorld world, int cameraId)
+	{
+		world.SetCameraPostProcessEffect(cameraId, PIP_HDR_PRIORITY, PostProcessEffectType.None, string.Empty);
+		world.SetCameraPostProcessEffect(cameraId, GRAIN_PRIORITY, PostProcessEffectType.None, string.Empty);
+		world.SetCameraLensFlareSet(cameraId, CameraLensFlareSetType.None, string.Empty);
+		world.SetCameraHDRBrightness(cameraId, -1);
+		world.AdjustCameraEV(cameraId, 0);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected int GetDebugTileCamera(int tile)
+	{
+		return m_iCameraIndex + 1 + tile;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected ResourceName GetDebugTileMaterial(int tile)
+	{
+		if (tile == 1)
+			return STOCK_HDR_MATERIAL;
+
+		if (tile == 2)
+			return VANILLA_PIP_HDR_MATERIAL;
+
+		if (tile == 3)
+			return GZW_BASE_HDR_MATERIAL;
+
+		if (tile == 4)
+			return GZW_PVS14_HDR_MATERIAL;
+
+		return ResourceName.Empty;
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -539,32 +635,37 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		m_fMainFov = fov;
 		m_fNightVisionFov = pipFov;
 
-		world.SetCameraEx(m_iCameraIndex, transform);
-		world.SetCameraVerticalFOV(m_iCameraIndex, pipFov);
-		world.SetCameraNearPlane(m_iCameraIndex, nearPlane);
-		world.SetCameraFarPlane(m_iCameraIndex, farPlane);
-
-		UpdatePiPExposure(world);
-	}
-
-	//------------------------------------------------------------------------------------------------
-	protected void UpdatePiPExposure(notnull BaseWorld world)
-	{
 		float mainExposure = -1;
 		if (m_bFollowMainExposure)
 			mainExposure = world.GetCameraHDRBrightness(world.GetCurrentCameraId());
 
+		UpdateCamera(world, m_iCameraIndex, transform, pipFov, nearPlane, farPlane, mainExposure);
+
+		foreach (int tileIndex, RenderTargetWidget debugTile : m_aDebugTiles)
+		{
+			UpdateCamera(world, GetDebugTileCamera(tileIndex), transform, pipFov, nearPlane, farPlane, mainExposure);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected void UpdateCamera(notnull BaseWorld world, int cameraId, vector transform[4], float fov, float nearPlane, float farPlane, float mainExposure)
+	{
+		world.SetCameraEx(cameraId, transform);
+		world.SetCameraVerticalFOV(cameraId, fov);
+		world.SetCameraNearPlane(cameraId, nearPlane);
+		world.SetCameraFarPlane(cameraId, farPlane);
+
 		if (mainExposure > 0)
 		{
 			// Manual exposure: the main camera's own, untouched value shifted by the gain in stops.
-			world.AdjustCameraEV(m_iCameraIndex, 0);
-			world.SetCameraHDRBrightness(m_iCameraIndex, mainExposure * Math.Pow(2, GetGainEV()));
+			world.AdjustCameraEV(cameraId, 0);
+			world.SetCameraHDRBrightness(cameraId, mainExposure * Math.Pow(2, GetNightVisionEV()));
 		}
 		else
 		{
 			// Own auto exposure, gain as an EV offset on top of it.
-			world.SetCameraHDRBrightness(m_iCameraIndex, -1);
-			world.AdjustCameraEV(m_iCameraIndex, GetGainEV());
+			world.SetCameraHDRBrightness(cameraId, -1);
+			world.AdjustCameraEV(cameraId, GetNightVisionEV());
 		}
 	}
 
@@ -594,10 +695,21 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		float boxSize = workspace.DPIUnscale(boxPixels);
 		m_fBoxFraction = boxPixels / screenHeight;
 
+		// Children of a render texture are drawn into it at their screen position, so the texture has to sit
+		// at the screen origin for its child to cover it. It is never drawn on screen itself.
 		if (m_wRenderTexture)
-			PlaceCentered(m_wRenderTexture, boxSize);
+			PlaceAt(m_wRenderTexture, 0, 0, 0, 0, 0, 0, boxSize);
 		else if (m_wRenderTarget)
 			PlaceCentered(m_wRenderTarget, boxSize);
+
+		// Row of debug tiles along the bottom edge, centred.
+		float tileSize = workspace.DPIUnscale(Math.Round(screenHeight * DEBUG_TILE_SIZE));
+		float tileGap = workspace.DPIUnscale(Math.Round(screenHeight * DEBUG_TILE_GAP));
+		float rowWidth = DEBUG_TILE_COUNT * tileSize + (DEBUG_TILE_COUNT - 1) * tileGap;
+		foreach (int tileIndex, RenderTargetWidget debugTile : m_aDebugTiles)
+		{
+			PlaceAt(debugTile, 0.5, 1, 0, 1, tileIndex * (tileSize + tileGap) - rowWidth * 0.5, -tileGap, tileSize);
+		}
 
 		if (m_wAperture)
 		{
@@ -621,10 +733,17 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	//------------------------------------------------------------------------------------------------
 	protected void PlaceCentered(notnull Widget widget, float size)
 	{
-		FrameSlot.SetAnchorMin(widget, 0.5, 0.5);
-		FrameSlot.SetAnchorMax(widget, 0.5, 0.5);
-		FrameSlot.SetAlignment(widget, 0.5, 0.5);
-		FrameSlot.SetPos(widget, 0, 0);
+		PlaceAt(widget, 0.5, 0.5, 0.5, 0.5, 0, 0, size);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Square widget whose pivot (alignment) sits at the given anchor of its parent, shifted by the offset.
+	protected void PlaceAt(notnull Widget widget, float anchorX, float anchorY, float alignX, float alignY, float offsetX, float offsetY, float size)
+	{
+		FrameSlot.SetAnchorMin(widget, anchorX, anchorY);
+		FrameSlot.SetAnchorMax(widget, anchorX, anchorY);
+		FrameSlot.SetAlignment(widget, alignX, alignY);
+		FrameSlot.SetPos(widget, offsetX, offsetY);
 		FrameSlot.SetSize(widget, size, size);
 	}
 
@@ -635,7 +754,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	{
 		m_iScopeCameraId = cameraId;
 		world.SetCameraPostProcessEffect(cameraId, HDR_PRIORITY, PostProcessEffectType.HDR, m_sScopeMaterial);
-		world.SetCameraPostProcessEffect(cameraId, GRAIN_PRIORITY, PostProcessEffectType.FilmGrain, m_sGrainMaterial);
+		world.SetCameraPostProcessEffect(cameraId, GRAIN_PRIORITY, PostProcessEffectType.FilmGrain, m_sScopeGrainMaterial);
 		world.AdjustCameraEV(cameraId, GetGainEV());
 		return true;
 	}
@@ -682,7 +801,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		DbgUI.Begin("GZW NVG", 20, 140);
 		DbgUI.Text("Composition: " + typename.EnumToString(GZW_ENightVisionComposition, m_eActiveComposition));
 		DbgUI.Text("Render format: " + typename.EnumToString(RenderTargetWidgetFormat, m_eRenderFormat));
-		DbgUI.Text(string.Format("Gain step: %1 (%2 EV)", m_iGain, GetGainEV()));
+		DbgUI.Text(string.Format("Gain step: %1, night vision %2 EV against main", m_iGain, GetNightVisionEV()));
 		DbgUI.Text(string.Format("Camera slot: main %1, night vision %2", mainCameraId, m_iCameraIndex));
 		DbgUI.Text(string.Format("Exposure: main %1, night vision %2", world.GetCameraHDRBrightness(mainCameraId), world.GetCameraHDRBrightness(m_iCameraIndex)));
 		DbgUI.Text(string.Format("Scene brightness: main %1, night vision %2", world.GetCameraSceneMiddleBrightness(mainCameraId), world.GetCameraSceneMiddleBrightness(m_iCameraIndex)));
@@ -690,6 +809,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		DbgUI.Text(string.Format("Screen: %1x%2, box %3 of height", m_iLayoutWidth, m_iLayoutHeight, m_fBoxFraction));
 		DbgUI.Text(string.Format("Widget px: texture %1, render %2, aperture %3", GetWidgetSize(m_wRenderTexture), GetWidgetSize(m_wRenderTarget), GetWidgetSize(m_wAperture)));
 		DbgUI.Text("Mask: " + maskState);
+		DbgUI.Text("Tiles: " + DEBUG_TILE_LEGEND);
 		DbgUI.End();
 	}
 
