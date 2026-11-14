@@ -11,6 +11,39 @@ enum GZW_ENightVisionComposition
 	FULLSCREEN_SCOPE
 }
 
+[EntityEditorProps()]
+class GZW_NightVisionFollowerClass : GenericEntityClass
+{
+}
+
+//! Runtime helper, spawned as a child of the camera the player looks through.
+//! A child is updated after its parent, so its post-frame runs once the main camera has its final transform for
+//! the frame. Syncing the night vision camera from the device's own entity ran earlier and left it a frame behind.
+class GZW_NightVisionFollower : GenericEntity
+{
+	protected GZW_NightVisionTestComponent m_Device;
+
+	//------------------------------------------------------------------------------------------------
+	void SetDevice(GZW_NightVisionTestComponent device)
+	{
+		m_Device = device;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	override void EOnPostFrame(IEntity owner, float timeSlice)
+	{
+		if (m_Device)
+			m_Device.OnCameraPostFrame();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void GZW_NightVisionFollower(IEntitySource src, IEntity parent)
+	{
+		SetEventMask(EntityEvent.POSTFRAME);
+		SetFlags(EntityFlags.ACTIVE);
+	}
+}
+
 [ComponentEditorProps(category: "GZW/Night Vision", description: "Standalone NVG test. N: toggle, Left Shift + =/-: gain.")]
 class GZW_NightVisionTestComponentClass : ScriptComponentClass
 {
@@ -140,6 +173,9 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected RTTextureWidget m_wRenderTexture;
 	protected RenderTargetWidget m_wRenderTarget;
 	protected ImageWidget m_wAperture;
+
+	protected GZW_NightVisionFollower m_Follower;
+	protected CameraBase m_FollowedCamera;
 	protected int m_iLayoutWidth;
 	protected int m_iLayoutHeight;
 	//! Side of the night vision square as a fraction of the screen height.
@@ -226,11 +262,75 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 		if (m_eActiveComposition == GZW_ENightVisionComposition.FULLSCREEN_SCOPE)
 			UpdateScope(world);
-		else
+		else if (!AttachFollower(world))
 			UpdatePiP(world);
 
 		if (m_bDebug)
 			DrawDebugPanel(world);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Called by the follower once the main camera is final for this frame.
+	void OnCameraPostFrame()
+	{
+		if (!m_bEnabled || m_eActiveComposition == GZW_ENightVisionComposition.FULLSCREEN_SCOPE)
+			return;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+			UpdatePiP(world);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Keeps the follower parented to the current camera.
+	//! eturn false when there is no camera entity to follow and the caller has to sync by itself
+	protected bool AttachFollower(notnull BaseWorld world)
+	{
+		CameraBase camera;
+		CameraManager cameraManager = GetGame().GetCameraManager();
+		if (cameraManager)
+			camera = cameraManager.CurrentCamera();
+
+		if (!camera)
+			return false;
+
+		// A follower dies with the camera it was attached to; the weak reference then reads null.
+		if (m_Follower && m_FollowedCamera == camera)
+			return true;
+
+		if (!m_Follower)
+		{
+			m_Follower = GZW_NightVisionFollower.Cast(GetGame().SpawnEntity(GZW_NightVisionFollower, world));
+			if (!m_Follower)
+				return false;
+
+			m_Follower.SetDevice(this);
+		}
+		else
+		{
+			IEntity previousParent = m_Follower.GetParent();
+			if (previousParent)
+				previousParent.RemoveChild(m_Follower);
+		}
+
+		camera.AddChild(m_Follower, -1, EAddChildFlags.AUTO_TRANSFORM);
+		m_FollowedCamera = camera;
+		return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected void DeleteFollower()
+	{
+		m_FollowedCamera = null;
+		if (!m_Follower)
+			return;
+
+		IEntity followerParent = m_Follower.GetParent();
+		if (followerParent)
+			followerParent.RemoveChild(m_Follower);
+
+		delete m_Follower;
+		m_Follower = null;
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -537,6 +637,8 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	//------------------------------------------------------------------------------------------------
 	protected void DisablePiP(BaseWorld world)
 	{
+		DeleteFollower();
+
 		if (m_wRoot)
 			m_wRoot.RemoveFromHierarchy();
 
