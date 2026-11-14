@@ -53,7 +53,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 	//------------------------------------------------------------------------------------------------
 	// Image
-	[Attribute("{972DF18CB9BFCBD4}Common/Postprocess/HDR_ScopePiP.emat", UIWidgets.ResourceNamePicker, "HDR material of the night vision camera. Default: the material the game uses for its own PiP scopes", "emat", category: "Image")]
+	[Attribute("{9DEECCABE8357209}Common/Postprocess/HDR.emat", UIWidgets.ResourceNamePicker, "HDR material of the night vision camera. Default: the game's stock HDR material", "emat", category: "Image")]
 	protected ResourceName m_sNightVisionMaterial;
 
 	[Attribute("{BA5DE2A5962C178C}Common/Postprocess/NightNoise.emat", UIWidgets.ResourceNamePicker, "Film grain material of the night vision camera. Default: the game's night noise", "emat", category: "Image")]
@@ -62,7 +62,7 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	[Attribute("0.15 1 0.2 1", UIWidgets.ColorPicker, "Phosphor colour: the night vision image is multiplied by it", category: "Image")]
 	protected ref Color m_PhosphorColor;
 
-	[Attribute("0", UIWidgets.Slider, "Colour saturation of the night vision image before the phosphor tint. 0: monochrome", params: "0 1 0.05", category: "Image")]
+	[Attribute("1", UIWidgets.Slider, "Saturation of the night vision image. The engine applies it after the phosphor tint, so 0 removes the tint and gives a white phosphor look", params: "0 1 0.05", category: "Image")]
 	protected float m_fSaturation;
 
 	[Attribute("{FC3F883230814A34}Assets/NVG/GZW_PVS14_HDR.emat", UIWidgets.ResourceNamePicker, "HDR material with the Scope vignette. Used by FULLSCREEN_SCOPE only", "emat", category: "Image")]
@@ -117,8 +117,6 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	//! Below the HUD, above the world.
 	protected static const int Z_ORDER = -100;
 	protected static const int FORCED_TIME_DELAY_MS = 3000;
-	//! The render texture gets its surface on the first render after it is sized, so the image is bound again for a few frames.
-	protected static const int REBIND_FRAMES = 3;
 
 	//! HDR materials the debug key steps through.
 	protected static const int DEBUG_MATERIAL_COUNT = 3;
@@ -146,7 +144,6 @@ class GZW_NightVisionTestComponent : ScriptComponent
 	protected int m_iLayoutHeight;
 	//! Side of the night vision square as a fraction of the screen height.
 	protected float m_fBoxFraction;
-	protected int m_iRebindFrames;
 	protected int m_iDebugMaterial;
 
 	// Shown in the debug panel only.
@@ -315,11 +312,11 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			m_iDebugMaterial = 0;
 
 		if (m_iDebugMaterial == 1)
-			m_sNightVisionMaterial = STOCK_HDR_MATERIAL;
+			m_sNightVisionMaterial = VANILLA_PIP_HDR_MATERIAL;
 		else if (m_iDebugMaterial == 2)
 			m_sNightVisionMaterial = GZW_PVS14_HDR_MATERIAL;
 		else
-			m_sNightVisionMaterial = VANILLA_PIP_HDR_MATERIAL;
+			m_sNightVisionMaterial = STOCK_HDR_MATERIAL;
 
 		SwitchOn();
 	}
@@ -513,6 +510,11 @@ class GZW_NightVisionTestComponent : ScriptComponent
 			m_wRenderTexture.Update();
 
 		m_wRenderTarget.Update();
+		m_wRenderTarget.SetRefresh(1, 0);
+		m_wRenderTarget.SetMaxFPS(0);
+		if (m_wRenderTexture)
+			m_wRenderTexture.SetMaxFPS(0);
+
 		m_wRenderTarget.SetFormat(m_eRenderFormat);
 		m_wRenderTarget.SetResolutionScale(m_fResolutionScale, m_fResolutionScale);
 		m_wRenderTarget.SetWorld(world, m_iCameraIndex);
@@ -562,13 +564,21 @@ class GZW_NightVisionTestComponent : ScriptComponent
 		if (workspace)
 			UpdatePiPLayout(workspace);
 
-		if (m_iRebindFrames > 0)
-		{
-			m_iRebindFrames--;
-			BindRenderTexture();
-		}
-
 		SyncCamera(world);
+		RefreshRenderTexture();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! A render texture shown by an image widget is drawn once and then kept: the first Workbench run with an
+	//! image showed a frozen frame. Invalidate it and bind it again every frame so it keeps following the camera.
+	protected void RefreshRenderTexture()
+	{
+		if (!m_wRenderTexture || !m_wRenderTarget)
+			return;
+
+		m_wRenderTarget.Update();
+		m_wRenderTexture.Update();
+		BindRenderTexture();
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -643,8 +653,6 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 		m_iLayoutWidth = screenWidth;
 		m_iLayoutHeight = screenHeight;
-		// A resized render texture gets a new surface.
-		m_iRebindFrames = REBIND_FRAMES;
 
 		float diameter = Math.Clamp(m_fApertureDiameter, 0.1, 1.5);
 		float softness = Math.Clamp(m_fEdgeSoftness, 0, 0.5);
