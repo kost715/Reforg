@@ -583,7 +583,10 @@ class GZW_NightVisionTestComponent : ScriptComponent
 
 		TimeAndWeatherManagerEntity manager = world.GetTimeAndWeatherManager();
 		if (!manager)
+		{
+			Print("[GZW NVG] No time and weather manager in this world: set the time of day by hand.", LogLevel.WARNING);
 			return;
+		}
 
 		// Authority only: on a client of a remote server this is refused and the time stays as it is.
 		if (!manager.SetTimeOfTheDay(m_fForcedTimeOfDay, true))
